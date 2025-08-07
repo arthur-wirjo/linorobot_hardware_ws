@@ -22,7 +22,15 @@
 // include the header of your new driver here similar to default_imu.h
 #include "default_imu.h"
 
+
+#include "lino_icm42670p.h" // <- custom IMU
+
 // now you can create a config constant that you can use in lino_base_config.h
+#ifdef USE_ICM42670P_IMU
+    #define IMU ICM42670P_IMU // <- custom IMU
+#endif
+
+
 #ifdef USE_GY85_IMU
     // pass your built in class to IMU macro
     #define IMU GY85IMU

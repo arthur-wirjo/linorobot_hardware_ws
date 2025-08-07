@@ -145,23 +145,31 @@ class Generic1: public MotorInterface
         }
 };
 
+// =================================================================
+// START OF MODIFIED BTS7960 CLASS
+// =================================================================
 class BTS7960: public MotorInterface
 {
     private:
-        int in_a_pin_;
-        int in_b_pin_;
+        int in_a_pin_; // Corresponds to RPWM
+        int in_b_pin_; // Corresponds to LPWM
         int pwm_max_;
+        // NEW: Member variables to store the allocated PWM channels
+        int pwm_channel_a_;
+        int pwm_channel_b_;
 
     protected:
         void forward(int pwm) override
         {
             if (in_a_pin_ < 0) return;
 #ifdef USE_SHORT_BRAKE
-            analogWrite(in_a_pin_, pwm_max_ - abs(pwm));
-            analogWrite(in_b_pin_, pwm_max_); // short brake
+            // MODIFIED: Use ledcWrite
+            ledcWrite(pwm_channel_a_, pwm_max_ - abs(pwm));
+            ledcWrite(pwm_channel_b_, pwm_max_);
 #else
-            analogWrite(in_a_pin_, 0);
-            analogWrite(in_b_pin_, abs(pwm));
+            // MODIFIED: Use ledcWrite
+            ledcWrite(pwm_channel_a_, 0);
+            ledcWrite(pwm_channel_b_, abs(pwm));
 #endif
         }
 
@@ -169,73 +177,71 @@ class BTS7960: public MotorInterface
         {
             if (in_a_pin_ < 0) return;
 #ifdef USE_SHORT_BRAKE
-            analogWrite(in_b_pin_, pwm_max_ - abs(pwm));
-            analogWrite(in_a_pin_, pwm_max_); // short brake
+            // MODIFIED: Use ledcWrite
+            ledcWrite(pwm_channel_b_, pwm_max_ - abs(pwm));
+            ledcWrite(pwm_channel_a_, pwm_max_);
 #else
-            analogWrite(in_b_pin_, 0);
-            analogWrite(in_a_pin_, abs(pwm));
+            // MODIFIED: Use ledcWrite
+            ledcWrite(pwm_channel_b_, 0);
+            ledcWrite(pwm_channel_a_, abs(pwm));
 #endif
         }
 
     public:
-        BTS7960(float pwm_frequency, int pwm_bits, bool invert, int unused, int in_a_pin, int in_b_pin): 
-            MotorInterface(invert),
-            in_a_pin_(in_a_pin),
-            in_b_pin_(in_b_pin)
-        {
-            if (in_a_pin_ < 0) return;
-            pwm_max_ = (1 << pwm_bits) - 1;
-            pinMode(in_a_pin_, OUTPUT);
-            pinMode(in_b_pin_, OUTPUT);
+        // NEW: Static variable to ensure each motor gets unique channels
+        static int next_pwm_channel_;
 
-            if(pwm_frequency > 0)
-            {
-                analogWriteFrequency(in_a_pin_, pwm_frequency);
-                analogWriteFrequency(in_b_pin_, pwm_frequency);
+        // This constructor is kept for compatibility
+        BTS7960(float pwm_frequency, int pwm_bits, bool invert, int unused, int in_a_pin, int in_b_pin)
+            : BTS7960(pwm_frequency, pwm_bits, invert, in_a_pin, in_b_pin) {}
 
-            }
-            analogWriteResolution(pwm_bits);
-
-            //ensure that the motor is in neutral state during bootup
-            analogWrite(in_a_pin_, 0);
-            analogWrite(in_b_pin_, 0);
-        }
-    
+        // Main constructor that does the work
         BTS7960(float pwm_frequency, int pwm_bits, bool invert, int in_a_pin, int in_b_pin): 
             MotorInterface(invert),
             in_a_pin_(in_a_pin),
             in_b_pin_(in_b_pin)
         {
             if (in_a_pin_ < 0) return;
+            
             pwm_max_ = (1 << pwm_bits) - 1;
-            pinMode(in_a_pin_, OUTPUT);
-            pinMode(in_b_pin_, OUTPUT);
 
-            if(pwm_frequency > 0)
-            {
-                analogWriteFrequency(in_a_pin_, pwm_frequency);
-                analogWriteFrequency(in_b_pin_, pwm_frequency);
+            // MODIFIED: ESP32 LEDC setup
+            // Assign two unique, incrementing PWM channels to this motor instance
+            pwm_channel_a_ = next_pwm_channel_++;
+            pwm_channel_b_ = next_pwm_channel_++;
 
-            }
-            analogWriteResolution(pwm_bits);
+            // Configure the PWM channels with frequency and resolution
+            ledcSetup(pwm_channel_a_, pwm_frequency, pwm_bits);
+            ledcSetup(pwm_channel_b_, pwm_frequency, pwm_bits);
 
-            //ensure that the motor is in neutral state during bootup
-            analogWrite(in_a_pin_, 0);
-            analogWrite(in_b_pin_, 0);
+            // Attach the configured PWM channels to the motor's PWM pins
+            ledcAttachPin(in_a_pin_, pwm_channel_a_);
+            ledcAttachPin(in_b_pin_, pwm_channel_b_);
+
+            // Ensure that the motor is in neutral state during bootup
+            brake();
         }
 
         void brake() override
         {
             if (in_a_pin_ < 0) return;
 #ifdef USE_SHORT_BRAKE
-            analogWrite(in_a_pin_, pwm_max_);
-            analogWrite(in_b_pin_, pwm_max_); // short brake
+            // MODIFIED: Use ledcWrite
+            ledcWrite(pwm_channel_a_, pwm_max_);
+            ledcWrite(pwm_channel_b_, pwm_max_);
 #else
-            analogWrite(in_b_pin_, 0);
-            analogWrite(in_a_pin_, 0);            
+            // MODIFIED: Use ledcWrite
+            ledcWrite(pwm_channel_b_, 0);
+            ledcWrite(pwm_channel_a_, 0);            
 #endif
         }
 };
+// =================================================================
+// END OF MODIFIED BTS7960 CLASS
+// =================================================================
+
+// NEW: Initialize the static channel counter for the BTS7960 class
+int BTS7960::next_pwm_channel_ = 0;
 
 class ESC: public MotorInterface
 {
@@ -276,3 +282,4 @@ class ESC: public MotorInterface
 };
 
 #endif
+

@@ -15,6 +15,9 @@
 #include <micro_ros_platformio.h>
 #include <stdio.h>
 
+#include <ESP32Servo.h>
+#include <std_msgs/msg/float32.h>
+
 #include <rcl/rcl.h>
 #include <rcl/error_handling.h>
 #include <rclc/rclc.h>
@@ -25,6 +28,8 @@
 #include <sensor_msgs/msg/magnetic_field.h>
 #include <geometry_msgs/msg/twist.h>
 #include <geometry_msgs/msg/vector3.h>
+
+#include "ICM42670P.h"
 
 #include "config.h"
 #include "motor.h"
@@ -62,6 +67,10 @@ rclc_support_t support;
 rcl_allocator_t allocator;
 rcl_node_t node;
 rcl_timer_t control_timer;
+
+Servo servo;
+rcl_subscription_t servo_subscriber;
+std_msgs__msg__Float32 servo_msg;
 
 unsigned long long time_offset = 0;
 unsigned long prev_cmd_time = 0;
@@ -108,32 +117,61 @@ MAG mag;
 #define BAUDRATE 921600
 #endif
 
+void servo_callback(const void *msgin)
+{
+    const std_msgs__msg__Float32 *msg = (const std_msgs__msg__Float32 *)msgin;
+    float velocity_command = constrain(msg->data, -1.0, 1.0);
+    int servo_value = map(velocity_command * 100, -100, 100, 0, 180);
+    servo.write(servo_value);
+}
+
 void setup() 
 {
     pinMode(LED_PIN, OUTPUT);
+    // Start serial communication FIRST
     Serial.begin(BAUDRATE);
+    // Give it a moment to initialize and for you to open the monitor
+    delay(2000); 
+
+    Serial.println("--- Booting Linorobot Firmware ---");
+
 #ifdef BOARD_INIT // board specific setup
+    Serial.println("Performing board-specific init...");
     BOARD_INIT
 #endif
 
+    Serial.println("Initializing IMU...");
     bool imu_ok = imu.init();
     if(!imu_ok)
     {
+        Serial.println("!!! IMU INIT FAILED !!!");
+        Serial.println("Halting execution. Check IMU wiring and address.");
         while(1)
         {
             flashLED(3);
         }
     }
+    Serial.println("IMU initialization successful.");
+
+    Serial.println("Initializing Magnetometer...");
     mag.init();
+    Serial.println("Magnetometer initialization successful.");
 
 #ifdef MICRO_ROS_TRANSPORT_ARDUINO_WIFI
+    Serial.println("Configuring micro-ROS WiFi transport...");
     set_microros_wifi_transports(WIFI_SSID, WIFI_PASSWORD, AGENT_IP, AGENT_PORT);
 #else
+    Serial.println("Configuring micro-ROS Serial transport...");
     set_microros_serial_transports(Serial);
 #endif
+    Serial.println("Transport configured.");
+
 #ifdef BOARD_INIT_LATE // board specific setup
+    Serial.println("Performing late board-specific init...");
     BOARD_INIT_LATE
 #endif
+    servo.attach(SERVO_PIN);
+    Serial.println("--- Setup complete, entering main loop. ---");
 }
 
 void loop() {
@@ -225,6 +263,13 @@ bool createEntities()
         ROSIDL_GET_MSG_TYPE_SUPPORT(geometry_msgs, msg, Twist),
         "cmd_vel"
     ));
+    // custom servo velocity subsciber
+    RCCHECK(rclc_subscription_init_default( 
+        &servo_subscriber, 
+        &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
+        "/servo_velocity"
+    ));
     // create timer for actuating the motors at 50 Hz (1000/20)
     const unsigned int control_timeout = 20;
     RCCHECK(rclc_timer_init_default( 
@@ -234,7 +279,7 @@ bool createEntities()
         controlCallback
     ));
     executor = rclc_executor_get_zero_initialized_executor();
-    RCCHECK(rclc_executor_init(&executor, &support.context, 2, & allocator));
+    RCCHECK(rclc_executor_init(&executor, &support.context, 3, & allocator));
     RCCHECK(rclc_executor_add_subscription(
         &executor, 
         &twist_subscriber, 
@@ -242,6 +287,15 @@ bool createEntities()
         &twistCallback, 
         ON_NEW_DATA
     ));
+    // add custom servo subscriber to the executor >>>
+    RCCHECK(rclc_executor_add_subscription(
+        &executor, 
+        &servo_subscriber, 
+        &servo_msg, 
+        &servo_callback, 
+        ON_NEW_DATA
+    ));
+
     RCCHECK(rclc_executor_add_timer(&executor, &control_timer));
 
     // synchronize time with the agent
@@ -262,6 +316,8 @@ bool destroyEntities()
     rcl_publisher_fini(&mag_publisher, &node);
 #endif
     rcl_subscription_fini(&twist_subscriber, &node);
+    // for custom servo
+    rcl_subscription_fini(&servo_subscriber, &node);
     rcl_node_fini(&node);
     rcl_timer_fini(&control_timer);
     rclc_executor_fini(&executor);

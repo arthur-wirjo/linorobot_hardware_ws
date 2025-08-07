@@ -50,7 +50,7 @@ String labels[4] = {"FRONT LEFT - M1: ", "FRONT RIGHT - M2: ", "REAR LEFT - M3: 
 
 void setup()
 {
-    Serial.begin(9600);
+    Serial.begin(115200);
     while (!Serial) {
     }
     Serial.println("Sampling process will spin the motors at its maximum RPM.");
